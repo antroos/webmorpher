@@ -1,13 +1,184 @@
 import sys
 import os
 import json
+import asyncio
+import socket
+import subprocess
+import time
+from functools import partial
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                             QPushButton, QTextEdit, QLabel, QLineEdit, QMessageBox, QDialog,
-                            QListWidget, QTabWidget, QSplitter, QFrame, QFileDialog)
-from PyQt5.QtCore import Qt, QSize
+                            QListWidget, QTabWidget, QSplitter, QFrame, QFileDialog, QCheckBox)
+from PyQt5.QtCore import Qt, QSize, QThread, pyqtSignal, QObject
+from browser_use import Agent, Browser, BrowserConfig
+from langchain_openai import ChatOpenAI
+from tempfile import gettempdir
 
 # Шлях до файлу з налаштуваннями
 CONFIG_FILE = os.path.expanduser("~/.webmorpher_config.json")
+
+class BrowserUseRunner(QThread):
+    """Клас для запуску browser-use у окремому потоці"""
+    log_signal = pyqtSignal(str)
+    finished_signal = pyqtSignal()
+    error_signal = pyqtSignal(str)
+    
+    def __init__(self, api_key, task, headless=False, debug_port=None):
+        super().__init__()
+        self.api_key = api_key
+        self.task = task
+        self.headless = headless
+        self.debug_port = debug_port
+        self._is_paused = False
+        self._is_stopped = False
+        self.agent = None
+    
+    def run(self):
+        """Запуск browser-use агента"""
+        try:
+            os.environ["OPENAI_API_KEY"] = self.api_key
+            
+            # Ініціалізація ChatOpenAI моделі
+            llm = ChatOpenAI(model="gpt-4o")
+            
+            # Створення браузера з відповідними параметрами
+            if self.debug_port:
+                # Для режиму дебагу використовуємо cdp_url
+                browser_config = BrowserConfig(cdp_url=f"http://localhost:{self.debug_port}")
+            else:
+                # Шлях до Google Chrome на macOS
+                chrome_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+                
+                # Для звичайного режиму використовуємо browser_binary_path
+                browser_config = BrowserConfig(
+                    headless=self.headless,
+                    browser_binary_path=chrome_path
+                )
+                
+            browser = Browser(config=browser_config)
+            
+            # Створення агента з callback для логування
+            self.agent = Agent(
+                task=self.task,
+                llm=llm,
+                browser=browser,
+                register_new_step_callback=self._on_new_step
+            )
+            
+            # Запускаємо агента в асинхронному режимі
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            if not self._is_stopped:
+                self.log_signal.emit("Запуск браузера та ініціалізація агента...")
+                result = loop.run_until_complete(self._run_with_pause_check())
+                self.log_signal.emit("Виконання завершено!")
+                self.finished_signal.emit()
+        
+        except Exception as e:
+            self.error_signal.emit(f"Помилка: {str(e)}")
+    
+    async def _run_with_pause_check(self):
+        """Запуск агента з можливістю паузи"""
+        try:
+            # Запускаємо агента
+            result = await self.agent.run()
+            return result
+        except Exception as e:
+            self.error_signal.emit(f"Помилка під час виконання: {str(e)}")
+            return None
+    
+    async def _on_new_step(self, state, output, step_index):
+        """Колбек для логування кроків агента"""
+        # Додаємо логування для UI на основі типу дії
+        action_type = getattr(output, 'action_type', None)
+        content = getattr(output, 'content', None)
+        
+        if action_type == "thinking":
+            self.log_signal.emit(f"🤔 Модель думає: {content}")
+        elif action_type == "browser_action":
+            self.log_signal.emit(f"🌐 Браузер: {content}")
+        elif action_type == "agent_action":
+            self.log_signal.emit(f"🤖 Агент: {content}")
+        elif action_type == "error":
+            self.log_signal.emit(f"❌ Помилка: {content}")
+        elif content:
+            self.log_signal.emit(f"{action_type}: {content}")
+        
+        # Перевіряємо чи є пауза
+        while self._is_paused and not self._is_stopped:
+            await asyncio.sleep(0.1)  # Маленька затримка, щоб не навантажувати процесор
+        
+        # Якщо зупинено, піднімаємо виключення для зупинки агента
+        if self._is_stopped:
+            raise Exception("Виконання зупинено користувачем")
+    
+    def pause(self):
+        """Призупинення виконання"""
+        self._is_paused = True
+        self.log_signal.emit("⏸️ Виконання призупинено...")
+    
+    def resume(self):
+        """Відновлення виконання"""
+        self._is_paused = False
+        self.log_signal.emit("▶️ Виконання відновлено...")
+    
+    def stop(self):
+        """Зупинка виконання"""
+        self._is_stopped = True
+        self._is_paused = False
+        self.log_signal.emit("⏹️ Виконання зупинено!")
+
+def find_free_port():
+    """Знайти вільний порт для запуску дебаг-сервера"""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('', 0))
+        return s.getsockname()[1]
+
+def launch_debug_browser(port=9222):
+    """Запустити браузер у режимі дебагу на вказаному порті"""
+    # Шлях до Chrome на macOS
+    if sys.platform == 'darwin':  # macOS
+        chrome_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        
+        if not os.path.exists(chrome_path):
+            raise Exception("Google Chrome не знайдено. Будь ласка, встановіть його або переконайтеся, що шлях правильний.")
+        print(f"Використовуємо Chrome за шляхом: {chrome_path}")
+    else:
+        # Для Linux та інших платформ
+        chrome_path = "google-chrome"
+    
+    # Створюємо тимчасову директорію для профілю Chrome
+    user_data_dir = os.path.join(gettempdir(), f"chrome-debug-{port}")
+    os.makedirs(user_data_dir, exist_ok=True)
+    
+    cmd = [
+        chrome_path,
+        f"--remote-debugging-port={port}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        f"--user-data-dir={user_data_dir}",  # Окрема директорія для сесії дебагу
+        "--disable-application-cache",  # Відключаємо кеш для зменшення конфліктів
+        "about:blank"
+    ]
+    
+    print(f"Запускаємо команду: {' '.join(cmd)}")
+    
+    try:
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        print(f"Chrome запущено з PID: {process.pid}")
+        
+        # Перевіряємо, що браузер справді працює
+        time.sleep(2)  # Чекаємо, щоб браузер встиг запуститися
+        
+        # Перевіряємо, що процес досі активний
+        if process.poll() is not None:
+            error = process.stderr.read().decode('utf-8', errors='ignore')
+            raise Exception(f"Браузер завершився з кодом {process.returncode}. Помилка: {error}")
+            
+        return process, port
+    except Exception as e:
+        raise Exception(f"Не вдалося запустити браузер: {str(e)}")
 
 class ApiKeyDialog(QDialog):
     def __init__(self, parent=None):
@@ -101,6 +272,9 @@ class WebMorpherApp(QMainWindow):
         self.programs = []
         self.current_program = None
         self.program_running = False
+        self.browser_runner = None
+        self.debug_browser_process = None
+        self.debug_port = None
         
         self.setWindowTitle("WebMorpher")
         self.setGeometry(100, 100, 1000, 700)
@@ -177,6 +351,9 @@ class WebMorpherApp(QMainWindow):
         self.stop_button.clicked.connect(self.stop_program)
         self.stop_button.setEnabled(False)
         
+        self.debug_button = QPushButton("Режим дебагу")
+        self.debug_button.clicked.connect(self.launch_debug_browser)
+        
         self.api_button = QPushButton("Змінити API ключ")
         self.api_button.clicked.connect(self.change_api_key)
         
@@ -186,9 +363,17 @@ class WebMorpherApp(QMainWindow):
         control_layout.addWidget(self.run_button)
         control_layout.addWidget(self.pause_button)
         control_layout.addWidget(self.stop_button)
+        control_layout.addWidget(self.debug_button)
         control_layout.addWidget(self.api_button)
         
         main_layout.addLayout(control_layout)
+        
+        # Опція фонового режиму
+        headless_layout = QHBoxLayout()
+        self.headless_checkbox = QCheckBox("Запускати браузер у фоновому режимі")
+        headless_layout.addWidget(self.headless_checkbox)
+        headless_layout.addStretch()
+        main_layout.addLayout(headless_layout)
         
         # Розділювач для списку програм та вкладок з результатами
         splitter = QSplitter(Qt.Horizontal)
@@ -332,6 +517,12 @@ class WebMorpherApp(QMainWindow):
             return
         
         program_name = self.current_program.get("name", "Без назви")
+        program_code = self.current_program.get("code", "")
+        
+        if not program_code.strip():
+            QMessageBox.warning(self, "Помилка", "Програма не містить коду для виконання")
+            return
+            
         self.program_running = True
         self.pause_button.setEnabled(True)
         self.stop_button.setEnabled(True)
@@ -340,35 +531,169 @@ class WebMorpherApp(QMainWindow):
         # Перемикаємося на вкладку результатів
         self.tabs.setCurrentIndex(1)
         
-        # Заглушка - пізніше тут буде реальний запуск програми
+        # Очищаємо вікно результатів
+        self.result_view.clear()
         self.result_view.append(f"Запуск програми: {program_name}")
-        self.result_view.append("Ця версія програми містить тільки інтерфейс без реальної функціональності.")
-        self.result_view.append("Тут буде відображатися вивід роботи програми...")
+        
+        # Створюємо та запускаємо потік для browser-use
+        headless = self.headless_checkbox.isChecked()
+        self.browser_runner = BrowserUseRunner(
+            api_key=self.api_key,
+            task=program_code,
+            headless=headless,
+            debug_port=self.debug_port
+        )
+        
+        # Підключаємо сигнали
+        self.browser_runner.log_signal.connect(self.on_browser_log)
+        self.browser_runner.error_signal.connect(self.on_browser_error)
+        self.browser_runner.finished_signal.connect(self.on_browser_finished)
+        
+        # Запускаємо виконання
+        self.browser_runner.start()
         
         self.statusBar().showMessage(f"Запущено програму: {program_name}")
     
-    def pause_program(self):
-        """Призупинення виконання програми"""
-        if not self.program_running:
-            return
-            
-        # Заглушка
-        self.result_view.append("Програму призупинено")
-        self.statusBar().showMessage("Програму призупинено")
+    def on_browser_log(self, message):
+        """Обробник логів від browser-use"""
+        self.result_view.append(message)
+        # Прокрутка до нижнього краю
+        self.result_view.verticalScrollBar().setValue(
+            self.result_view.verticalScrollBar().maximum()
+        )
     
-    def stop_program(self):
-        """Зупинка виконання програми"""
-        if not self.program_running:
-            return
-            
+    def on_browser_error(self, error_message):
+        """Обробник помилок від browser-use"""
+        self.result_view.append(f"<span style='color: red;'>{error_message}</span>")
+        # Оновлюємо стан інтерфейсу
         self.program_running = False
         self.pause_button.setEnabled(False)
         self.stop_button.setEnabled(False)
         self.run_button.setEnabled(True)
+    
+    def on_browser_finished(self):
+        """Обробник завершення виконання browser-use"""
+        self.result_view.append("Виконання програми завершено.")
+        # Оновлюємо стан інтерфейсу
+        self.program_running = False
+        self.pause_button.setEnabled(False)
+        self.stop_button.setEnabled(False)
+        self.run_button.setEnabled(True)
+    
+    def pause_program(self):
+        """Призупинення виконання програми"""
+        if not self.program_running or not self.browser_runner:
+            return
+            
+        if self.browser_runner._is_paused:
+            # Відновлення виконання
+            self.browser_runner.resume()
+            self.pause_button.setText("Пауза")
+        else:
+            # Призупинення виконання
+            self.browser_runner.pause()
+            self.pause_button.setText("Продовжити")
         
-        # Заглушка
-        self.result_view.append("Програму зупинено")
+        self.statusBar().showMessage("Програму призупинено/відновлено")
+    
+    def stop_program(self):
+        """Зупинка виконання програми"""
+        if not self.program_running or not self.browser_runner:
+            return
+            
+        # Зупиняємо виконання
+        self.browser_runner.stop()
+        
+        # Оновлюємо стан інтерфейсу
+        self.program_running = False
+        self.pause_button.setEnabled(False)
+        self.stop_button.setEnabled(False)
+        self.run_button.setEnabled(True)
+        self.pause_button.setText("Пауза")
+        
         self.statusBar().showMessage("Програму зупинено")
+    
+    def launch_debug_browser(self):
+        """Запуск браузера в режимі дебагу"""
+        try:
+            # Якщо браузер вже запущено, просто показуємо інформацію
+            if self.debug_browser_process and self.debug_port:
+                QMessageBox.information(
+                    self, 
+                    "Браузер у режимі дебагу", 
+                    f"Браузер вже запущено на порту {self.debug_port}"
+                )
+                return
+                
+            # Використовуємо фіксований порт 9222
+            port = 9222
+            
+            # Перевіряємо, чи не зайнятий порт
+            try:
+                socket.create_connection(("localhost", port), timeout=1).close()
+                reply = QMessageBox.question(
+                    self, "Увага", 
+                    f"Порт {port} вже використовується. Можливо, Chrome вже запущено. Спробувати все одно?",
+                    QMessageBox.Yes | QMessageBox.No
+                )
+                if reply == QMessageBox.No:
+                    return
+            except (socket.timeout, socket.error):
+                # Порт вільний, продовжуємо
+                pass
+                
+            # Зберігаємо логи у тимчасовий файл
+            log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chrome_debug.log")
+            with open(log_file, "w") as f:
+                f.write(f"Запуск Chrome на порту {port} в {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                
+            # Запускаємо браузер
+            process, port = launch_debug_browser(port)
+            
+            # Зберігаємо процес і порт
+            self.debug_browser_process = process
+            self.debug_port = port
+            
+            # Перевіряємо, що запустився саме Chrome
+            try:
+                import requests
+                import json
+                response = requests.get(f"http://localhost:{port}/json/version")
+                browser_info = json.loads(response.text)
+                browser_name = browser_info.get("Browser", "")
+                
+                with open(log_file, "a") as f:
+                    f.write(f"Підключено до браузера: {browser_name}\n")
+                    
+                if "Chrome" in browser_name:
+                    QMessageBox.information(
+                        self, 
+                        "Браузер у режимі дебагу", 
+                        f"Google Chrome запущено на порту {port}\nІнформація про браузер: {browser_name}"
+                    )
+                else:
+                    QMessageBox.warning(
+                        self, 
+                        "Увага", 
+                        f"Запущено браузер, але це не Chrome: {browser_name}. Можливі проблеми з сумісністю."
+                    )
+            except Exception as e:
+                with open(log_file, "a") as f:
+                    f.write(f"Помилка перевірки браузера: {str(e)}\n")
+                QMessageBox.information(
+                    self, 
+                    "Браузер у режимі дебагу", 
+                    f"Браузер запущено на порту {port}, але не вдалося перевірити тип браузера."
+                )
+            
+            self.statusBar().showMessage(f"Google Chrome у режимі дебагу запущено на порту {port}")
+        
+        except Exception as e:
+            QMessageBox.warning(
+                self, 
+                "Помилка", 
+                f"Не вдалося запустити браузер у режимі дебагу: {str(e)}"
+            )
     
     def change_api_key(self):
         """Зміна API ключа"""
@@ -382,6 +707,7 @@ class WebMorpherApp(QMainWindow):
 
     def closeEvent(self, event):
         """Обробка закриття додатку"""
+        # Перевіряємо, чи виконується програма
         if self.program_running:
             reply = QMessageBox.question(
                 self, "Підтвердження", 
@@ -395,6 +721,13 @@ class WebMorpherApp(QMainWindow):
             else:
                 event.ignore()
                 return
+        
+        # Закриваємо дебаг-браузер, якщо він запущений
+        if self.debug_browser_process:
+            try:
+                self.debug_browser_process.terminate()
+            except:
+                pass
                 
         # Зберігаємо конфігурацію перед виходом
         self.save_config()
