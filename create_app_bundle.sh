@@ -91,6 +91,28 @@ cp README.md "$RESOURCES_DIR/"
 cp INSTALL.md "$RESOURCES_DIR/"
 cp requirements.txt "$RESOURCES_DIR/"
 
+# Удаляем config-файл с API ключом, если он существует
+CONFIG_FILE=~/.webmorpher_config.json
+if [ -f "$CONFIG_FILE" ]; then
+    echo "Удаление конфигурационного файла с API ключом..."
+    # Создаем резервную копию, если пользователь захочет восстановить
+    cp "$CONFIG_FILE" "${CONFIG_FILE}.bak"
+    
+    # Очищаем API ключ в файле
+    python -c "
+import json
+try:
+    with open('$CONFIG_FILE', 'r') as f:
+        config = json.load(f)
+    config['api_key'] = ''
+    with open('$CONFIG_FILE', 'w') as f:
+        json.dump(config, f)
+    print('API ключ удален из конфигурационного файла.')
+except Exception as e:
+    print(f'Ошибка при обработке файла конфигурации: {e}')
+"
+fi
+
 # Создание DMG с помощью hdiutil
 echo "Создание DMG пакета..."
 DMG_NAME="WebMorpher.dmg"

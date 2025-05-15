@@ -803,7 +803,7 @@ class WebMorpherApp(QMainWindow):
     def change_api_key(self):
         """Зміна API ключа"""
         dialog = ApiKeyDialog(self)
-        dialog.key_input.setText(self.api_key)
+        dialog.key_input.setText("")  # Поле ввода всегда пустое, независимо от текущего значения ключа
         
         if dialog.exec_():
             self.api_key = dialog.api_key
@@ -840,6 +840,22 @@ class WebMorpherApp(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    
+    # Проверяем на наличие аргумента для сброса API ключа
+    if len(sys.argv) > 1 and sys.argv[1] == "--reset-api-key":
+        # Если конфигурационный файл существует, удаляем API ключ
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, 'r') as f:
+                    config = json.load(f)
+                    # Удаляем ключ API, сохраняя программы
+                    config['api_key'] = ""
+                with open(CONFIG_FILE, 'w') as f:
+                    json.dump(config, f)
+                print("API ключ сброшен!")
+            except Exception as e:
+                print(f"Ошибка при сбросе API ключа: {e}")
+    
     window = WebMorpherApp()
     window.show()
     sys.exit(app.exec_()) 
