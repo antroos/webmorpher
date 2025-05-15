@@ -14,8 +14,45 @@ from browser_use import Agent, Browser, BrowserConfig
 from langchain_openai import ChatOpenAI
 from tempfile import gettempdir
 
+# Определяем корневую директорию приложения
+if getattr(sys, 'frozen', False):
+    # Если приложение запущено из .app бандла
+    APP_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(sys.executable)))
+    RESOURCES_ROOT = os.path.join(APP_ROOT, 'Resources')
+else:
+    # Если приложение запущено из исходного кода
+    APP_ROOT = os.path.dirname(os.path.abspath(__file__))
+    RESOURCES_ROOT = APP_ROOT
+
 # Шлях до файлу з налаштуваннями
 CONFIG_FILE = os.path.expanduser("~/.webmorpher_config.json")
+# Шлях до директорії профілю браузера
+BROWSER_PROFILE_DIR = os.path.expanduser("~/.webmorpher_browser_profile")
+
+def get_default_chrome_profile():
+    """Визначення шляху до стандартного профілю користувача Chrome/Chromium"""
+    user_profile_dir = None
+    
+    if sys.platform == 'darwin':  # macOS
+        # Шлях до стандартного профілю Chrome на macOS
+        chrome_profile_alt = os.path.expanduser("~/Library/Application Support/Google/Chrome")
+        
+        # Перевіряємо наявність каталогу
+        if os.path.exists(chrome_profile_alt) and os.path.isdir(chrome_profile_alt):
+            user_profile_dir = chrome_profile_alt
+    elif sys.platform.startswith('win'):  # Windows
+        # Шлях до стандартного профілю Chrome на Windows
+        chrome_profile = os.path.join(os.environ.get('LOCALAPPDATA', ''), 
+                                     "Google", "Chrome", "User Data")
+        if os.path.exists(chrome_profile) and os.path.isdir(chrome_profile):
+            user_profile_dir = chrome_profile
+    elif sys.platform.startswith('linux'):  # Linux
+        # Шлях до стандартного профілю Chrome на Linux
+        chrome_profile = os.path.expanduser("~/.config/google-chrome")
+        if os.path.exists(chrome_profile) and os.path.isdir(chrome_profile):
+            user_profile_dir = chrome_profile
+    
+    return user_profile_dir
 
 class BrowserUseRunner(QThread):
     """Клас для запуску browser-use у окремому потоці"""
@@ -23,12 +60,13 @@ class BrowserUseRunner(QThread):
     finished_signal = pyqtSignal()
     error_signal = pyqtSignal(str)
     
-    def __init__(self, api_key, task, headless=False, debug_port=None):
+    def __init__(self, api_key, task, headless=False, debug_port=None, user_profile_dir=None):
         super().__init__()
         self.api_key = api_key
         self.task = task
         self.headless = headless
         self.debug_port = debug_port
+        self.user_profile_dir = user_profile_dir
         self._is_paused = False
         self._is_stopped = False
         self.agent = None
@@ -47,13 +85,34 @@ class BrowserUseRunner(QThread):
                 browser_config = BrowserConfig(cdp_url=f"http://localhost:{self.debug_port}")
             else:
                 # Шлях до Google Chrome на macOS
-                chrome_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+                chrome_paths = [
+                    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",  # Стандартный путь
+                    os.path.expanduser("~/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),  # Пользовательские приложения
+                    "/Applications/Chromium.app/Contents/MacOS/Chromium",  # Chromium как запасной вариант
+                ]
                 
-                # Для звичайного режиму використовуємо browser_binary_path
-                browser_config = BrowserConfig(
-                    headless=self.headless,
-                    browser_binary_path=chrome_path
-                )
+                # Находим первый существующий браузер
+                chrome_path = None
+                for path in chrome_paths:
+                    if os.path.exists(path):
+                        chrome_path = path
+                        break
+                
+                if not chrome_path:
+                    raise Exception("Не знайдено Google Chrome або Chromium. Будь ласка, встановіть один з браузерів.")
+                
+                # Параметры конфигурации браузера
+                browser_config_params = {
+                    'headless': self.headless,
+                    'browser_binary_path': chrome_path,
+                }
+                
+                # Если задан каталог профиля пользователя, используем его
+                if self.user_profile_dir:
+                    browser_config_params['user_data_dir'] = self.user_profile_dir
+                
+                # Для звичайного режиму використовуємо browser_binary_path и user_data_dir
+                browser_config = BrowserConfig(**browser_config_params)
                 
             browser = Browser(config=browser_config)
             
@@ -135,29 +194,47 @@ def find_free_port():
         s.bind(('', 0))
         return s.getsockname()[1]
 
-def launch_debug_browser(port=9222):
+def launch_debug_browser(port=9222, use_user_profile=True, user_profile_dir=None):
     """Запустити браузер у режимі дебагу на вказаному порті"""
     # Шлях до Chrome на macOS
     if sys.platform == 'darwin':  # macOS
-        chrome_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        chrome_paths = [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",  # Стандартный путь
+            os.path.expanduser("~/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),  # Пользовательские приложения
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",  # Chromium как запасной вариант
+        ]
         
-        if not os.path.exists(chrome_path):
-            raise Exception("Google Chrome не знайдено. Будь ласка, встановіть його або переконайтеся, що шлях правильний.")
-        print(f"Використовуємо Chrome за шляхом: {chrome_path}")
+        # Находим первый существующий браузер
+        chrome_path = None
+        for path in chrome_paths:
+            if os.path.exists(path):
+                chrome_path = path
+                break
+                
+        if not chrome_path:
+            raise Exception("Не знайдено Google Chrome або Chromium. Будь ласка, встановіть один з браузерів.")
+            
+        print(f"Використовуємо браузер за шляхом: {chrome_path}")
     else:
         # Для Linux та інших платформ
         chrome_path = "google-chrome"
     
-    # Створюємо тимчасову директорію для профілю Chrome
-    user_data_dir = os.path.join(gettempdir(), f"chrome-debug-{port}")
-    os.makedirs(user_data_dir, exist_ok=True)
+    # Визначаємо директорію для профілю Chrome
+    if use_user_profile and user_profile_dir:
+        # Використовуємо профіль користувача
+        debug_profile_dir = user_profile_dir
+        print(f"Використовуємо профіль користувача для дебагу: {debug_profile_dir}")
+    else:
+        # Використовуємо тимчасову директорію для профілю Chrome
+        debug_profile_dir = os.path.join(gettempdir(), f"chrome-debug-{port}")
+        os.makedirs(debug_profile_dir, exist_ok=True)
     
     cmd = [
         chrome_path,
         f"--remote-debugging-port={port}",
         "--no-first-run",
         "--no-default-browser-check",
-        f"--user-data-dir={user_data_dir}",  # Окрема директорія для сесії дебагу
+        f"--user-data-dir={debug_profile_dir}",
         "--disable-application-cache",  # Відключаємо кеш для зменшення конфліктів
         "about:blank"
     ]
@@ -166,7 +243,7 @@ def launch_debug_browser(port=9222):
     
     try:
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        print(f"Chrome запущено з PID: {process.pid}")
+        print(f"Браузер запущено з PID: {process.pid}")
         
         # Перевіряємо, що браузер справді працює
         time.sleep(2)  # Чекаємо, щоб браузер встиг запуститися
@@ -268,13 +345,14 @@ class ProgramEditorDialog(QDialog):
 class WebMorpherApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.api_key = ""
+        self.api_key = ""  # Пустой API ключ по умолчанию
         self.programs = []
         self.current_program = None
         self.program_running = False
         self.browser_runner = None
         self.debug_browser_process = None
         self.debug_port = None
+        self.chrome_profile_path = get_default_chrome_profile()
         
         self.setWindowTitle("WebMorpher")
         self.setGeometry(100, 100, 1000, 700)
@@ -313,6 +391,8 @@ class WebMorpherApp(QMainWindow):
         """Перевірка наявності API ключа"""
         if not self.api_key:
             dialog = ApiKeyDialog(self)
+            # Убедиться, что поле ввода пустое
+            dialog.key_input.setText("")  
             if dialog.exec_():
                 self.api_key = dialog.api_key
                 self.save_config()
@@ -372,6 +452,18 @@ class WebMorpherApp(QMainWindow):
         headless_layout = QHBoxLayout()
         self.headless_checkbox = QCheckBox("Запускати браузер у фоновому режимі")
         headless_layout.addWidget(self.headless_checkbox)
+        
+        # Опція використання профілю користувача
+        self.use_user_profile_checkbox = QCheckBox("Використовувати поточний профіль браузера")
+        self.use_user_profile_checkbox.setToolTip("Запускати з профілем, де збережені паролі, історія та налаштування")
+        if not self.chrome_profile_path:
+            self.use_user_profile_checkbox.setEnabled(False)
+            self.use_user_profile_checkbox.setToolTip("Профіль Chrome не знайдено")
+        else:
+            # Если профиль найден, активируем опцию по умолчанию
+            self.use_user_profile_checkbox.setChecked(True)
+        
+        headless_layout.addWidget(self.use_user_profile_checkbox)
         headless_layout.addStretch()
         main_layout.addLayout(headless_layout)
         
@@ -535,13 +627,22 @@ class WebMorpherApp(QMainWindow):
         self.result_view.clear()
         self.result_view.append(f"Запуск програми: {program_name}")
         
+        # Визначаємо, який профіль використовувати
+        use_user_profile = self.use_user_profile_checkbox.isChecked() and self.chrome_profile_path
+        user_profile = self.chrome_profile_path if use_user_profile else None
+        
+        # Повідомлення про профіль
+        if use_user_profile:
+            self.result_view.append(f"Використовуємо профіль користувача: {self.chrome_profile_path}")
+        
         # Створюємо та запускаємо потік для browser-use
         headless = self.headless_checkbox.isChecked()
         self.browser_runner = BrowserUseRunner(
             api_key=self.api_key,
             task=program_code,
             headless=headless,
-            debug_port=self.debug_port
+            debug_port=self.debug_port,
+            user_profile_dir=user_profile
         )
         
         # Підключаємо сигнали
@@ -647,8 +748,12 @@ class WebMorpherApp(QMainWindow):
             with open(log_file, "w") as f:
                 f.write(f"Запуск Chrome на порту {port} в {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 
+            # Визначаємо, який профіль використовувати
+            use_user_profile = self.use_user_profile_checkbox.isChecked() and self.chrome_profile_path
+            user_profile = self.chrome_profile_path if use_user_profile else None
+            
             # Запускаємо браузер
-            process, port = launch_debug_browser(port)
+            process, port = launch_debug_browser(port, use_user_profile=use_user_profile, user_profile_dir=user_profile)
             
             # Зберігаємо процес і порт
             self.debug_browser_process = process
