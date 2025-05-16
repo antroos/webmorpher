@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                             QPushButton, QTextEdit, QLabel, QLineEdit, QMessageBox, QDialog,
                             QListWidget, QTabWidget, QSplitter, QFrame, QFileDialog, QCheckBox)
 from PyQt5.QtCore import Qt, QSize, QThread, pyqtSignal, QObject
+from PyQt5.QtGui import QFont
 from browser_use import Agent, Browser, BrowserConfig
 from langchain_openai import ChatOpenAI
 from tempfile import gettempdir
@@ -149,7 +150,15 @@ class BrowserUseRunner(QThread):
     
     async def _on_new_step(self, state, output, step_index):
         """Колбек для логування кроків агента"""
-        # Додаємо логування для UI на основі типу дії
+        # Додаємо інформацію з AgentBrain
+        if hasattr(output, 'current_state'):
+            brain = output.current_state
+            if brain.next_goal:
+                self.log_signal.emit(f"🎯 Наступна ціль: {brain.next_goal}")
+            if brain.evaluation_previous_goal:
+                self.log_signal.emit(f"✓ Результат: {brain.evaluation_previous_goal}")
+        
+        # Стандартні статуси
         action_type = getattr(output, 'action_type', None)
         content = getattr(output, 'content', None)
         
@@ -345,7 +354,7 @@ class ProgramEditorDialog(QDialog):
 class WebMorpherApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.api_key = ""  # Пустой API ключ по умолчанию
+        self.api_key = ""
         self.programs = []
         self.current_program = None
         self.program_running = False
@@ -353,6 +362,7 @@ class WebMorpherApp(QMainWindow):
         self.debug_browser_process = None
         self.debug_port = None
         self.chrome_profile_path = get_default_chrome_profile()
+        self.current_status = None
         
         self.setWindowTitle("WebMorpher")
         self.setGeometry(100, 100, 1000, 700)
@@ -501,6 +511,25 @@ class WebMorpherApp(QMainWindow):
         self.result_tab = QWidget()
         result_layout = QVBoxLayout(self.result_tab)
         
+        # Панель статуса
+        status_frame = QFrame()
+        status_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
+        status_layout = QVBoxLayout(status_frame)
+        
+        # Заголовок статуса
+        status_header = QLabel("Поточний статус:")
+        status_header.setFont(QFont("", 12, QFont.Bold))
+        status_layout.addWidget(status_header)
+        
+        # Текст статуса
+        self.status_label = QLabel("Очікування запуску...")
+        self.status_label.setFont(QFont("", 11))
+        self.status_label.setStyleSheet("padding: 10px;")
+        status_layout.addWidget(self.status_label)
+        
+        result_layout.addWidget(status_frame)
+        
+        # Лог результатів
         self.result_view = QTextEdit()
         self.result_view.setReadOnly(True)
         result_layout.addWidget(self.result_view)
@@ -536,7 +565,8 @@ class WebMorpherApp(QMainWindow):
             self.current_program = program
             self.code_view.setPlainText(program.get("code", ""))
             self.result_view.clear()
-            self.statusBar().showMessage(f"Обрано програму: {program.get('name', 'Без назви')}")
+            self.status_label.setText("Обрано програму...")
+            self.status_label.setStyleSheet("padding: 10px; color: black;")
         else:
             self.current_program = None
             self.code_view.clear()
@@ -554,7 +584,8 @@ class WebMorpherApp(QMainWindow):
             self.programs.append(program_data)
             self.save_config()
             self.load_program_list()
-            self.statusBar().showMessage(f"Створено нову програму: {program_data['name']}")
+            self.status_label.setText("Створено нову програму...")
+            self.status_label.setStyleSheet("padding: 10px; color: black;")
     
     def edit_program(self):
         """Редагування обраної програми"""
@@ -579,7 +610,8 @@ class WebMorpherApp(QMainWindow):
             self.save_config()
             self.load_program_list()
             self.program_list.setCurrentRow(index)
-            self.statusBar().showMessage(f"Програму оновлено: {program_data['name']}")
+            self.status_label.setText("Програму оновлено...")
+            self.status_label.setStyleSheet("padding: 10px; color: black;")
     
     def delete_program(self):
         """Видалення обраної програми"""
@@ -600,7 +632,8 @@ class WebMorpherApp(QMainWindow):
             self.programs.pop(index)
             self.save_config()
             self.load_program_list()
-            self.statusBar().showMessage(f"Програму видалено: {program_name}")
+            self.status_label.setText("Програму видалено...")
+            self.status_label.setStyleSheet("padding: 10px; color: black;")
     
     def run_program(self):
         """Запуск обраної програми"""
@@ -623,8 +656,10 @@ class WebMorpherApp(QMainWindow):
         # Перемикаємося на вкладку результатів
         self.tabs.setCurrentIndex(1)
         
-        # Очищаємо вікно результатів
+        # Очищаємо вікно результатів і статус
         self.result_view.clear()
+        self.status_label.setText("Запуск програми...")
+        self.status_label.setStyleSheet("padding: 10px; color: black;")
         self.result_view.append(f"Запуск програми: {program_name}")
         
         # Визначаємо, який профіль використовувати
@@ -653,11 +688,40 @@ class WebMorpherApp(QMainWindow):
         # Запускаємо виконання
         self.browser_runner.start()
         
-        self.statusBar().showMessage(f"Запущено програму: {program_name}")
+        self.status_label.setText("Запущено програму...")
+        self.status_label.setStyleSheet("padding: 10px; color: black;")
     
     def on_browser_log(self, message):
         """Обробник логів від browser-use"""
-        self.result_view.append(message)
+        # Додаємо повідомлення в лог з відповідним форматуванням
+        if "🎯 Наступна ціль:" in message:
+            self.result_view.append(f"<span style='color: #2196F3;'>{message}</span>")
+        elif "✓ Результат:" in message:
+            self.result_view.append(f"<span style='color: #4CAF50;'>{message}</span>")
+        elif "🤔 Модель думає:" in message:
+            self.result_view.append(f"<span style='color: #FF9800;'>{message}</span>")
+        elif "🌐 Браузер:" in message:
+            self.result_view.append(f"<span style='color: #9C27B0;'>{message}</span>")
+        elif "❌ Помилка:" in message:
+            self.result_view.append(f"<span style='color: #F44336;'>{message}</span>")
+        else:
+            self.result_view.append(message)
+        
+        # Оновлюємо статус у верхньому полі
+        self.status_label.setText(message)
+        if "🎯 Наступна ціль:" in message:
+            self.status_label.setStyleSheet("padding: 10px; color: #2196F3;")
+        elif "✓ Результат:" in message:
+            self.status_label.setStyleSheet("padding: 10px; color: #4CAF50;")
+        elif "🤔 Модель думає:" in message:
+            self.status_label.setStyleSheet("padding: 10px; color: #FF9800;")
+        elif "🌐 Браузер:" in message:
+            self.status_label.setStyleSheet("padding: 10px; color: #9C27B0;")
+        elif "❌ Помилка:" in message:
+            self.status_label.setStyleSheet("padding: 10px; color: #F44336;")
+        else:
+            self.status_label.setStyleSheet("padding: 10px; color: black;")
+        
         # Прокрутка до нижнього краю
         self.result_view.verticalScrollBar().setValue(
             self.result_view.verticalScrollBar().maximum()
@@ -695,7 +759,8 @@ class WebMorpherApp(QMainWindow):
             self.browser_runner.pause()
             self.pause_button.setText("Продовжити")
         
-        self.statusBar().showMessage("Програму призупинено/відновлено")
+        self.status_label.setText("Програму призупинено/відновлено...")
+        self.status_label.setStyleSheet("padding: 10px; color: black;")
     
     def stop_program(self):
         """Зупинка виконання програми"""
@@ -712,7 +777,8 @@ class WebMorpherApp(QMainWindow):
         self.run_button.setEnabled(True)
         self.pause_button.setText("Пауза")
         
-        self.statusBar().showMessage("Програму зупинено")
+        self.status_label.setText("Програму зупинено...")
+        self.status_label.setStyleSheet("padding: 10px; color: black;")
     
     def launch_debug_browser(self):
         """Запуск браузера в режимі дебагу"""
@@ -791,7 +857,7 @@ class WebMorpherApp(QMainWindow):
                     f"Браузер запущено на порту {port}, але не вдалося перевірити тип браузера."
                 )
             
-            self.statusBar().showMessage(f"Google Chrome у режимі дебагу запущено на порту {port}")
+            self.status_label.setText(f"Google Chrome у режимі дебагу запущено на порту {port}")
         
         except Exception as e:
             QMessageBox.warning(
@@ -808,7 +874,7 @@ class WebMorpherApp(QMainWindow):
         if dialog.exec_():
             self.api_key = dialog.api_key
             self.save_config()
-            self.statusBar().showMessage("API ключ оновлено")
+            self.status_label.setText("API ключ оновлено")
 
     def closeEvent(self, event):
         """Обробка закриття додатку"""
