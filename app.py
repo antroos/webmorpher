@@ -8,9 +8,10 @@ import time
 from functools import partial
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                             QPushButton, QTextEdit, QLabel, QLineEdit, QMessageBox, QDialog,
-                            QListWidget, QTabWidget, QSplitter, QFrame, QFileDialog, QCheckBox)
-from PyQt5.QtCore import Qt, QSize, QThread, pyqtSignal, QObject
-from PyQt5.QtGui import QFont
+                            QListWidget, QTabWidget, QSplitter, QFrame, QFileDialog, QCheckBox,
+                            QStyleFactory)
+from PyQt5.QtCore import Qt, QSize, QThread, pyqtSignal, QObject, QRect, QPoint
+from PyQt5.QtGui import QFont, QPalette, QColor, QFontDatabase
 from browser_use import Agent, Browser, BrowserConfig
 from langchain_openai import ChatOpenAI
 from tempfile import gettempdir
@@ -354,6 +355,15 @@ class ProgramEditorDialog(QDialog):
 class WebMorpherApp(QMainWindow):
     def __init__(self):
         super().__init__()
+        # Встановлюємо нативний стиль macOS
+        QApplication.setStyle(QStyleFactory.create("macintosh"))
+        
+        # Завантажуємо системний шрифт SF Pro
+        font_id = QFontDatabase.addApplicationFont(":/System/Library/Fonts/SFPro.ttf")
+        if font_id != -1:
+            self.default_font = QFont("SF Pro", 13)
+            QApplication.setFont(self.default_font)
+        
         self.api_key = ""
         self.programs = []
         self.current_program = None
@@ -364,8 +374,86 @@ class WebMorpherApp(QMainWindow):
         self.chrome_profile_path = get_default_chrome_profile()
         self.current_status = None
         
+        # Налаштування вікна
         self.setWindowTitle("WebMorpher")
-        self.setGeometry(100, 100, 1000, 700)
+        self.setGeometry(100, 100, 1200, 800)  # Збільшуємо розмір для кращого UX
+        
+        # Налаштування прозорості та матеріалів
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: rgba(255, 255, 255, 0.95);
+            }
+            QWidget {
+                font-family: "SF Pro", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            }
+            /* Стилі для світлої теми */
+            QMainWindow[lightTheme="true"] {
+                background-color: rgba(255, 255, 255, 0.95);
+                color: #000000;
+            }
+            /* Стилі для темної теми */
+            QMainWindow[lightTheme="false"] {
+                background-color: rgba(28, 28, 28, 0.95);
+                color: #FFFFFF;
+            }
+            /* Базові відступи */
+            QWidget {
+                margin: 0;
+                padding: 0;
+            }
+            /* Стиль для кнопок */
+            QPushButton {
+                border: none;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-size: 13px;
+                background-color: #007AFF;
+                color: white;
+                margin: 4px;
+            }
+            QPushButton:hover {
+                background-color: #0063CC;
+            }
+            QPushButton:pressed {
+                background-color: #004999;
+            }
+            QPushButton:disabled {
+                background-color: #E5E5E5;
+                color: #999999;
+            }
+            /* Стиль для полів вводу */
+            QLineEdit, QTextEdit {
+                border: 1px solid #E5E5E5;
+                border-radius: 6px;
+                padding: 8px;
+                background-color: rgba(255, 255, 255, 0.8);
+            }
+            /* Стиль для списків */
+            QListWidget {
+                border: 1px solid #E5E5E5;
+                border-radius: 6px;
+                background-color: rgba(255, 255, 255, 0.8);
+            }
+            /* Стиль для вкладок */
+            QTabWidget::pane {
+                border: 1px solid #E5E5E5;
+                border-radius: 6px;
+                background-color: rgba(255, 255, 255, 0.8);
+            }
+            QTabBar::tab {
+                padding: 8px 16px;
+                margin: 4px 2px;
+                border-radius: 6px;
+            }
+            QTabBar::tab:selected {
+                background-color: #007AFF;
+                color: white;
+            }
+        """)
+        
+        # Визначаємо тему системи
+        self.update_theme()
         
         # Спочатку перевіряємо наявність API ключа
         self.load_config()
@@ -374,6 +462,14 @@ class WebMorpherApp(QMainWindow):
             
         self.setup_ui()
         
+    def update_theme(self):
+        """Оновлення теми відповідно до системних налаштувань"""
+        # В майбутньому тут буде перевірка системної теми
+        # Наразі просто встановлюємо світлу тему
+        self.setProperty("lightTheme", True)
+        self.style().unpolish(self)
+        self.style().polish(self)
+    
     def load_config(self):
         """Завантаження конфігурації з файлу"""
         if os.path.exists(CONFIG_FILE):
@@ -417,6 +513,8 @@ class WebMorpherApp(QMainWindow):
         self.setCentralWidget(central_widget)
         
         main_layout = QVBoxLayout(central_widget)
+        main_layout.setContentsMargins(20, 20, 20, 20)  # Відступи згідно гайдлайнів
+        main_layout.setSpacing(16)  # Відступ між елементами
         
         # Верхня панель з кнопками керування
         control_layout = QHBoxLayout()
