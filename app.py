@@ -6,6 +6,14 @@ import socket
 import subprocess
 import time
 from functools import partial
+
+# Add environment variables to prevent OpenBLAS threading issues
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+os.environ["OMP_NUM_THREADS"] = "1"
+
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                             QPushButton, QTextEdit, QLabel, QLineEdit, QMessageBox, QDialog,
                             QListWidget, QTabWidget, QSplitter, QFrame, QFileDialog, QCheckBox,
@@ -137,7 +145,14 @@ class BrowserUseRunner(QThread):
                 self.finished_signal.emit()
         
         except Exception as e:
-            self.error_signal.emit(f"Помилка: {str(e)}")
+            error_msg = f"Помилка: {str(e)}"
+            
+            # Check if it might be an OpenBLAS threading issue
+            if "EXC_BAD_ACCESS" in str(e) or "segmentation fault" in str(e).lower():
+                error_msg += "\n\nМожливо, це пов'язано з проблемою багатопоточності в NumPy/OpenBLAS."
+                error_msg += "\nСпробуйте перезапустити програму та використовувати фоновий режим браузера."
+            
+            self.error_signal.emit(error_msg)
     
     async def _run_with_pause_check(self):
         """Запуск агента з можливістю паузи"""
@@ -369,20 +384,19 @@ class WebMorpherApp(QMainWindow):
         self.current_program = None
         self.program_running = False
         self.browser_runner = None
-        self.debug_browser_process = None
-        self.debug_port = None
         self.chrome_profile_path = get_default_chrome_profile()
         self.current_status = None
         
         # Налаштування вікна
         self.setWindowTitle("WebMorpher")
-        self.setGeometry(100, 100, 1200, 800)  # Збільшуємо розмір для кращого UX
+        self.setGeometry(100, 100, 900, 600)  # Компактніший розмір для кращого UX
         
         # Налаштування прозорості та матеріалів
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setStyleSheet("""
             QMainWindow {
                 background-color: rgba(255, 255, 255, 0.95);
+                border-radius: 10px;
             }
             QWidget {
                 font-family: "SF Pro", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -391,11 +405,13 @@ class WebMorpherApp(QMainWindow):
             QMainWindow[lightTheme="true"] {
                 background-color: rgba(255, 255, 255, 0.95);
                 color: #000000;
+                border: 1px solid rgba(0, 0, 0, 0.1);
             }
             /* Стилі для темної теми */
             QMainWindow[lightTheme="false"] {
                 background-color: rgba(28, 28, 28, 0.95);
                 color: #FFFFFF;
+                border: 1px solid rgba(255, 255, 255, 0.1);
             }
             /* Базові відступи */
             QWidget {
@@ -406,21 +422,29 @@ class WebMorpherApp(QMainWindow):
             QPushButton {
                 border: none;
                 border-radius: 6px;
-                padding: 8px 16px;
+                padding: 8px 12px;
                 font-size: 13px;
-                background-color: #007AFF;
-                color: white;
-                margin: 4px;
+                background-color: transparent;
+                color: #007AFF;
+                margin: 2px;
+                min-width: 24px;
+                min-height: 24px;
             }
             QPushButton:hover {
-                background-color: #0063CC;
+                background-color: rgba(0, 122, 255, 0.1);
             }
             QPushButton:pressed {
-                background-color: #004999;
+                background-color: rgba(0, 122, 255, 0.2);
             }
             QPushButton:disabled {
-                background-color: #E5E5E5;
-                color: #999999;
+                color: rgba(0, 0, 0, 0.3);
+            }
+            /* Стилі для темної теми */
+            QMainWindow[lightTheme="false"] QPushButton {
+                color: #0A84FF;
+            }
+            QMainWindow[lightTheme="false"] QPushButton:disabled {
+                color: rgba(255, 255, 255, 0.3);
             }
             /* Стиль для полів вводу */
             QLineEdit, QTextEdit {
@@ -539,9 +563,6 @@ class WebMorpherApp(QMainWindow):
         self.stop_button.clicked.connect(self.stop_program)
         self.stop_button.setEnabled(False)
         
-        self.debug_button = QPushButton("Режим дебагу")
-        self.debug_button.clicked.connect(self.launch_debug_browser)
-        
         self.api_button = QPushButton("Змінити API ключ")
         self.api_button.clicked.connect(self.change_api_key)
         
@@ -551,7 +572,6 @@ class WebMorpherApp(QMainWindow):
         control_layout.addWidget(self.run_button)
         control_layout.addWidget(self.pause_button)
         control_layout.addWidget(self.stop_button)
-        control_layout.addWidget(self.debug_button)
         control_layout.addWidget(self.api_button)
         
         main_layout.addLayout(control_layout)
@@ -738,43 +758,39 @@ class WebMorpherApp(QMainWindow):
         if not self.current_program:
             QMessageBox.warning(self, "Помилка", "Спочатку оберіть програму для запуску")
             return
-        
-        program_name = self.current_program.get("name", "Без назви")
-        program_code = self.current_program.get("code", "")
-        
-        if not program_code.strip():
-            QMessageBox.warning(self, "Помилка", "Програма не містить коду для виконання")
+            
+        if not self.check_api_key():
             return
             
+        program_code = self.current_program.get("code", "")
+        if not program_code:
+            QMessageBox.warning(self, "Помилка", "Програма порожня")
+            return
+            
+        # Перевіряємо, чи не запущена вже програма
+        if self.program_running:
+            QMessageBox.warning(self, "Помилка", "Програма вже виконується")
+            return
+            
+        # Оновлюємо стан інтерфейсу
         self.program_running = True
         self.pause_button.setEnabled(True)
         self.stop_button.setEnabled(True)
         self.run_button.setEnabled(False)
         
-        # Перемикаємося на вкладку результатів
-        self.tabs.setCurrentIndex(1)
-        
-        # Очищаємо вікно результатів і статус
+        # Очищаємо вікно результатів
         self.result_view.clear()
-        self.status_label.setText("Запуск програми...")
-        self.status_label.setStyleSheet("padding: 10px; color: black;")
-        self.result_view.append(f"Запуск програми: {program_name}")
         
-        # Визначаємо, який профіль використовувати
-        use_user_profile = self.use_user_profile_checkbox.isChecked() and self.chrome_profile_path
+        # Визначаємо режим запуску
+        headless = self.headless_checkbox.isChecked()
+        use_user_profile = self.use_user_profile_checkbox.isChecked()
         user_profile = self.chrome_profile_path if use_user_profile else None
         
-        # Повідомлення про профіль
-        if use_user_profile:
-            self.result_view.append(f"Використовуємо профіль користувача: {self.chrome_profile_path}")
-        
-        # Створюємо та запускаємо потік для browser-use
-        headless = self.headless_checkbox.isChecked()
+        # Створюємо і запускаємо runner
         self.browser_runner = BrowserUseRunner(
             api_key=self.api_key,
             task=program_code,
             headless=headless,
-            debug_port=self.debug_port,
             user_profile_dir=user_profile
         )
         
@@ -878,92 +894,6 @@ class WebMorpherApp(QMainWindow):
         self.status_label.setText("Програму зупинено...")
         self.status_label.setStyleSheet("padding: 10px; color: black;")
     
-    def launch_debug_browser(self):
-        """Запуск браузера в режимі дебагу"""
-        try:
-            # Якщо браузер вже запущено, просто показуємо інформацію
-            if self.debug_browser_process and self.debug_port:
-                QMessageBox.information(
-                    self, 
-                    "Браузер у режимі дебагу", 
-                    f"Браузер вже запущено на порту {self.debug_port}"
-                )
-                return
-                
-            # Використовуємо фіксований порт 9222
-            port = 9222
-            
-            # Перевіряємо, чи не зайнятий порт
-            try:
-                socket.create_connection(("localhost", port), timeout=1).close()
-                reply = QMessageBox.question(
-                    self, "Увага", 
-                    f"Порт {port} вже використовується. Можливо, Chrome вже запущено. Спробувати все одно?",
-                    QMessageBox.Yes | QMessageBox.No
-                )
-                if reply == QMessageBox.No:
-                    return
-            except (socket.timeout, socket.error):
-                # Порт вільний, продовжуємо
-                pass
-                
-            # Зберігаємо логи у тимчасовий файл
-            log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chrome_debug.log")
-            with open(log_file, "w") as f:
-                f.write(f"Запуск Chrome на порту {port} в {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                
-            # Визначаємо, який профіль використовувати
-            use_user_profile = self.use_user_profile_checkbox.isChecked() and self.chrome_profile_path
-            user_profile = self.chrome_profile_path if use_user_profile else None
-            
-            # Запускаємо браузер
-            process, port = launch_debug_browser(port, use_user_profile=use_user_profile, user_profile_dir=user_profile)
-            
-            # Зберігаємо процес і порт
-            self.debug_browser_process = process
-            self.debug_port = port
-            
-            # Перевіряємо, що запустився саме Chrome
-            try:
-                import requests
-                import json
-                response = requests.get(f"http://localhost:{port}/json/version")
-                browser_info = json.loads(response.text)
-                browser_name = browser_info.get("Browser", "")
-                
-                with open(log_file, "a") as f:
-                    f.write(f"Підключено до браузера: {browser_name}\n")
-                    
-                if "Chrome" in browser_name:
-                    QMessageBox.information(
-                        self, 
-                        "Браузер у режимі дебагу", 
-                        f"Google Chrome запущено на порту {port}\nІнформація про браузер: {browser_name}"
-                    )
-                else:
-                    QMessageBox.warning(
-                        self, 
-                        "Увага", 
-                        f"Запущено браузер, але це не Chrome: {browser_name}. Можливі проблеми з сумісністю."
-                    )
-            except Exception as e:
-                with open(log_file, "a") as f:
-                    f.write(f"Помилка перевірки браузера: {str(e)}\n")
-                QMessageBox.information(
-                    self, 
-                    "Браузер у режимі дебагу", 
-                    f"Браузер запущено на порту {port}, але не вдалося перевірити тип браузера."
-                )
-            
-            self.status_label.setText(f"Google Chrome у режимі дебагу запущено на порту {port}")
-        
-        except Exception as e:
-            QMessageBox.warning(
-                self, 
-                "Помилка", 
-                f"Не вдалося запустити браузер у режимі дебагу: {str(e)}"
-            )
-    
     def change_api_key(self):
         """Зміна API ключа"""
         dialog = ApiKeyDialog(self)
@@ -990,13 +920,6 @@ class WebMorpherApp(QMainWindow):
             else:
                 event.ignore()
                 return
-        
-        # Закриваємо дебаг-браузер, якщо він запущений
-        if self.debug_browser_process:
-            try:
-                self.debug_browser_process.terminate()
-            except:
-                pass
                 
         # Зберігаємо конфігурацію перед виходом
         self.save_config()
