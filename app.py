@@ -17,7 +17,7 @@ os.environ["OMP_NUM_THREADS"] = "1"
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                             QPushButton, QTextEdit, QLabel, QLineEdit, QMessageBox, QDialog,
                             QListWidget, QTabWidget, QSplitter, QFrame, QFileDialog, QCheckBox,
-                            QStyleFactory)
+                            QStyleFactory, QGroupBox)
 from PyQt5.QtCore import Qt, QSize, QThread, pyqtSignal, QObject, QRect, QPoint
 from PyQt5.QtGui import QFont, QPalette, QColor, QFontDatabase
 from browser_use import Agent, Browser, BrowserConfig
@@ -536,13 +536,26 @@ class WebMorpherApp(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
+        # Основний макет з верхньою панеллю та головним контентом
         main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(20, 20, 20, 20)  # Відступи згідно гайдлайнів
-        main_layout.setSpacing(16)  # Відступ між елементами
+        main_layout.setContentsMargins(0, 0, 0, 0)  # Прибираємо відступи для повноекранного вигляду
+        main_layout.setSpacing(0)  # Прибираємо відступи між елементами
         
-        # Верхня панель з кнопками керування
-        control_layout = QHBoxLayout()
+        # 1. ВЕРХНЯ ПАНЕЛЬ (Toolbar)
+        top_panel = QFrame()
+        top_panel.setObjectName("topPanel")
+        top_panel.setStyleSheet("""
+            #topPanel {
+                background-color: rgba(240, 240, 240, 0.9);
+                border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+                min-height: 70px;
+                padding: 10px;
+            }
+        """)
+        top_layout = QHBoxLayout(top_panel)
+        top_layout.setContentsMargins(15, 5, 15, 5)
         
+        # Кнопки у верхній панелі (тимчасово залишаємо старі кнопки)
         self.new_button = QPushButton("Нова програма")
         self.new_button.clicked.connect(self.create_program)
         
@@ -566,24 +579,96 @@ class WebMorpherApp(QMainWindow):
         self.api_button = QPushButton("Змінити API ключ")
         self.api_button.clicked.connect(self.change_api_key)
         
-        control_layout.addWidget(self.new_button)
-        control_layout.addWidget(self.edit_button)
-        control_layout.addWidget(self.delete_button)
-        control_layout.addWidget(self.run_button)
-        control_layout.addWidget(self.pause_button)
-        control_layout.addWidget(self.stop_button)
-        control_layout.addWidget(self.api_button)
+        top_layout.addWidget(self.new_button)
+        top_layout.addWidget(self.edit_button)
+        top_layout.addWidget(self.delete_button)
+        top_layout.addWidget(self.run_button)
+        top_layout.addWidget(self.pause_button)
+        top_layout.addWidget(self.stop_button)
+        top_layout.addSpacing(20)
+        top_layout.addWidget(self.api_button)
+        top_layout.addStretch()  # Пушуємо кнопки вліво
         
-        main_layout.addLayout(control_layout)
+        main_layout.addWidget(top_panel)
+        
+        # 2. ОСНОВНИЙ КОНТЕНТ (з бічною панеллю та областю контенту)
+        content_container = QWidget()
+        content_layout = QHBoxLayout(content_container)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
+        
+        # 2.1 БІЧНА ПАНЕЛЬ
+        sidebar = QFrame()
+        sidebar.setObjectName("sidebar")
+        sidebar.setStyleSheet("""
+            #sidebar {
+                background-color: rgba(245, 245, 247, 0.8);
+                border-right: 1px solid rgba(0, 0, 0, 0.1);
+                min-width: 250px;
+                max-width: 350px;
+            }
+        """)
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(15, 15, 15, 15)
+        
+        # Заголовок бічної панелі
+        sidebar_title = QLabel("Доступні програми")
+        sidebar_title.setStyleSheet("font-weight: bold; font-size: 14px; margin-bottom: 10px;")
+        sidebar_layout.addWidget(sidebar_title)
+        
+        # Список програм
+        self.program_list = QListWidget()
+        self.program_list.setStyleSheet("""
+            QListWidget {
+                background-color: transparent;
+                border: none;
+                border-radius: 10px;
+                padding: 5px;
+                outline: none;
+            }
+            QListWidget::item {
+                border-radius: 6px;
+                padding: 10px;
+                margin: 2px 0px;
+            }
+            QListWidget::item:hover {
+                background-color: rgba(0, 122, 255, 0.1);
+            }
+            QListWidget::item:selected {
+                background-color: rgba(0, 122, 255, 0.2);
+                color: #007AFF;
+            }
+        """)
+        self.program_list.currentRowChanged.connect(self.on_program_selected)
+        sidebar_layout.addWidget(self.program_list)
+        
+        # Опції
+        options_group = QGroupBox("Опції запуску")
+        options_group.setStyleSheet("""
+            QGroupBox {
+                border: 1px solid rgba(0, 0, 0, 0.1);
+                border-radius: 8px;
+                margin-top: 10px;
+                padding-top: 15px;
+                font-weight: bold;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top center;
+                padding: 0 5px;
+            }
+        """)
+        options_layout = QVBoxLayout(options_group)
         
         # Опція фонового режиму
-        headless_layout = QHBoxLayout()
         self.headless_checkbox = QCheckBox("Запускати браузер у фоновому режимі")
-        headless_layout.addWidget(self.headless_checkbox)
+        self.headless_checkbox.setStyleSheet("font-size: 12px;")
+        options_layout.addWidget(self.headless_checkbox)
         
         # Опція використання профілю користувача
         self.use_user_profile_checkbox = QCheckBox("Використовувати поточний профіль браузера")
         self.use_user_profile_checkbox.setToolTip("Запускати з профілем, де збережені паролі, історія та налаштування")
+        self.use_user_profile_checkbox.setStyleSheet("font-size: 12px;")
         if not self.chrome_profile_path:
             self.use_user_profile_checkbox.setEnabled(False)
             self.use_user_profile_checkbox.setToolTip("Профіль Chrome не знайдено")
@@ -591,58 +676,88 @@ class WebMorpherApp(QMainWindow):
             # Если профиль найден, активируем опцию по умолчанию
             self.use_user_profile_checkbox.setChecked(True)
         
-        headless_layout.addWidget(self.use_user_profile_checkbox)
-        headless_layout.addStretch()
-        main_layout.addLayout(headless_layout)
+        options_layout.addWidget(self.use_user_profile_checkbox)
+        sidebar_layout.addWidget(options_group)
         
-        # Розділювач для списку програм та вкладок з результатами
-        splitter = QSplitter(Qt.Horizontal)
+        content_layout.addWidget(sidebar)
         
-        # Список програм
-        program_frame = QFrame()
-        program_layout = QVBoxLayout(program_frame)
-        
-        program_label = QLabel("Доступні програми:")
-        self.program_list = QListWidget()
-        self.program_list.currentRowChanged.connect(self.on_program_selected)
-        
-        program_layout.addWidget(program_label)
-        program_layout.addWidget(self.program_list)
-        
-        splitter.addWidget(program_frame)
+        # 2.2 ОСНОВНА ОБЛАСТЬ КОНТЕНТУ
+        main_content = QFrame()
+        main_content.setObjectName("mainContent")
+        main_content.setStyleSheet("""
+            #mainContent {
+                background-color: rgba(255, 255, 255, 0.9);
+                border-radius: 0px;
+            }
+        """)
+        main_content_layout = QVBoxLayout(main_content)
+        main_content_layout.setContentsMargins(20, 20, 20, 20)
         
         # Вкладки з редактором та результатами
-        tab_frame = QFrame()
-        tab_layout = QVBoxLayout(tab_frame)
-        
         self.tabs = QTabWidget()
+        self.tabs.setStyleSheet("""
+            QTabWidget::pane {
+                border: none;
+                background-color: transparent;
+            }
+            QTabBar::tab {
+                background-color: rgba(240, 240, 240, 0.7);
+                padding: 8px 16px;
+                margin: 4px 2px 0px 2px;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+            }
+            QTabBar::tab:selected {
+                background-color: rgba(0, 122, 255, 0.8);
+                color: white;
+            }
+        """)
         
         # Вкладка перегляду програми
         self.view_tab = QWidget()
         view_layout = QVBoxLayout(self.view_tab)
+        view_layout.setContentsMargins(0, 10, 0, 0)
         
         self.code_view = QTextEdit()
         self.code_view.setReadOnly(True)
+        self.code_view.setStyleSheet("""
+            QTextEdit {
+                background-color: rgba(250, 250, 250, 0.7);
+                border: 1px solid rgba(0, 0, 0, 0.1);
+                border-radius: 8px;
+                padding: 10px;
+                font-family: "SF Mono", Monaco, monospace;
+                font-size: 13px;
+            }
+        """)
         view_layout.addWidget(self.code_view)
         
         # Вкладка результатів
         self.result_tab = QWidget()
         result_layout = QVBoxLayout(self.result_tab)
+        result_layout.setContentsMargins(0, 10, 0, 0)
         
         # Панель статуса
         status_frame = QFrame()
         status_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
+        status_frame.setStyleSheet("""
+            QFrame {
+                background-color: rgba(250, 250, 250, 0.7);
+                border: 1px solid rgba(0, 0, 0, 0.1);
+                border-radius: 8px;
+                margin-bottom: 10px;
+            }
+        """)
         status_layout = QVBoxLayout(status_frame)
         
         # Заголовок статуса
         status_header = QLabel("Поточний статус:")
-        status_header.setFont(QFont("", 12, QFont.Bold))
+        status_header.setStyleSheet("font-weight: bold; font-size: 14px;")
         status_layout.addWidget(status_header)
         
         # Текст статуса
         self.status_label = QLabel("Очікування запуску...")
-        self.status_label.setFont(QFont("", 11))
-        self.status_label.setStyleSheet("padding: 10px;")
+        self.status_label.setStyleSheet("padding: 10px; font-size: 13px;")
         status_layout.addWidget(self.status_label)
         
         result_layout.addWidget(status_frame)
@@ -650,22 +765,38 @@ class WebMorpherApp(QMainWindow):
         # Лог результатів
         self.result_view = QTextEdit()
         self.result_view.setReadOnly(True)
+        self.result_view.setStyleSheet("""
+            QTextEdit {
+                background-color: rgba(250, 250, 250, 0.7);
+                border: 1px solid rgba(0, 0, 0, 0.1);
+                border-radius: 8px;
+                padding: 10px;
+                font-family: "SF Pro", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                font-size: 13px;
+            }
+        """)
         result_layout.addWidget(self.result_view)
         
         self.tabs.addTab(self.view_tab, "Програма")
         self.tabs.addTab(self.result_tab, "Результати")
         
-        tab_layout.addWidget(self.tabs)
+        main_content_layout.addWidget(self.tabs)
+        content_layout.addWidget(main_content)
         
-        splitter.addWidget(tab_frame)
+        # Встановлюємо розміри бічної панелі та основного контенту
+        content_layout.setStretch(0, 1)  # Бічна панель
+        content_layout.setStretch(1, 3)  # Основний контент
         
-        # Встановлюємо пропорції розділювача
-        splitter.setSizes([200, 800])
-        
-        main_layout.addWidget(splitter)
+        main_layout.addWidget(content_container)
         
         # Статус бар
         self.statusBar().showMessage("Готовий до роботи")
+        self.statusBar().setStyleSheet("""
+            QStatusBar {
+                background-color: rgba(240, 240, 240, 0.9);
+                border-top: 1px solid rgba(0, 0, 0, 0.1);
+            }
+        """)
         
         # Завантаження списку програм
         self.load_program_list()
