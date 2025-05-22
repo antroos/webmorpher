@@ -24,7 +24,6 @@ from browser_use import Agent, Browser, BrowserConfig
 from langchain_openai import ChatOpenAI
 from tempfile import gettempdir
 import resources_rc  # Импортируем скомпилированный файл ресурсов
-from first_run_dialog import FirstRunDialog
 
 # Определяем корневую директорию приложения
 if getattr(sys, 'frozen', False):
@@ -44,21 +43,21 @@ BROWSER_PROFILE_DIR = os.path.expanduser("~/.webmorpher_browser_profile")
 # Функція для коректного визначення шляху до іконок
 def get_icon_path(icon_name):
     """Визначення правильного шляху до іконки в залежності від режиму запуску"""
-    # Спочатку перевіряємо в svg папці
-    paths = [
-        os.path.join(RESOURCES_ROOT, 'icons', 'svg', icon_name),
-        os.path.join(RESOURCES_ROOT, 'icons', icon_name),
-        f":/icons/svg/{icon_name}",
-        f":/icons/{icon_name}"
-    ]
+    # В режимі розробки іконки знаходяться в папці icons/svg
+    dev_path = os.path.join(RESOURCES_ROOT, 'icons', 'svg', icon_name)
     
-    # Перевіряємо всі можливі шляхи
-    for path in paths:
-        if os.path.exists(path):
-            return path
+    # В режимі додатка іконки знаходяться в Resources/icons/svg
+    app_path = os.path.join(RESOURCES_ROOT, 'icons', 'svg', icon_name)
     
-    print(f"ПОПЕРЕДЖЕННЯ: Іконка не знайдена: {icon_name}")
-    return None
+    # Перевіряємо, який шлях існує
+    if os.path.exists(dev_path):
+        return dev_path
+    elif os.path.exists(app_path):
+        return app_path
+    else:
+        print(f"ПОПЕРЕДЖЕННЯ: Іконка не знайдена: {icon_name}")
+        # Використовуємо іконки з ресурсів
+        return f":/icons/svg/{icon_name}"
 
 def get_default_chrome_profile():
     """Визначення шляху до стандартного профілю користувача Chrome/Chromium"""
@@ -394,6 +393,15 @@ class WebMorpherApp(QMainWindow):
         
         # Основні налаштування вікна
         self.setWindowTitle("WebMorpher")
+        self.setGeometry(100, 100, 1200, 800)
+        self.setMinimumSize(1000, 700)
+        
+        # Встановлюємо стиль вікна для macOS
+        if sys.platform == 'darwin':
+            self.setWindowFlags(Qt.Window | Qt.WindowFullscreenButtonHint | Qt.WindowTitleHint | 
+                               Qt.WindowCloseButtonHint | Qt.WindowMinimizeButtonHint)
+            # Активуємо прозорість вікна
+            self.setAttribute(Qt.WA_TranslucentBackground)
         
         # Ініціалізація змінних
         self.programs = []
@@ -401,7 +409,6 @@ class WebMorpherApp(QMainWindow):
         self.program_running = False
         self.browser_runner = None
         self.is_paused = False
-        self.show_welcome_screen = True  # За замовчуванням показуємо екран привітання
         
         # Визначаємо шлях до профілю Chrome
         self.chrome_profile_path = get_default_chrome_profile()
@@ -413,13 +420,6 @@ class WebMorpherApp(QMainWindow):
         # Завантаження конфігурації
         self.api_key = ""
         self.load_config()
-        
-        # Показываем диалог первого запуска, если это необходимо
-        if self.show_welcome_screen:
-            self.show_welcome_dialog()
-            
-        self.setGeometry(100, 100, 1200, 800)
-        self.setMinimumSize(1000, 700)
         
         # Перевірка наявності API ключа
         if not self.check_api_key():
@@ -525,7 +525,6 @@ class WebMorpherApp(QMainWindow):
                     config = json.load(f)
                     self.api_key = config.get('api_key', '')
                     self.programs = config.get('programs', [])
-                    self.show_welcome_screen = config.get('show_welcome_dialog', True)
             except Exception as e:
                 print(f"Помилка завантаження конфігурації: {e}")
     
@@ -533,8 +532,7 @@ class WebMorpherApp(QMainWindow):
         """Збереження конфігурації у файл"""
         config = {
             'api_key': self.api_key,
-            'programs': self.programs,
-            'show_welcome_dialog': self.show_welcome_screen
+            'programs': self.programs
         }
         try:
             with open(CONFIG_FILE, 'w') as f:
@@ -563,229 +561,50 @@ class WebMorpherApp(QMainWindow):
         
         # Основний макет з верхньою панеллю та головним контентом
         main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(10, 10, 10, 10)  # Відступи для тіні та округлення
+        main_layout.setContentsMargins(0, 0, 0, 0)  # Прибираємо відступи для повноекранного вигляду
         main_layout.setSpacing(0)  # Прибираємо відступи між елементами
-        
-        # Контейнер з тінню та округленими кутами
-        main_container = QFrame()
-        main_container.setObjectName("mainContainer")
-        main_container.setStyleSheet("""
-            #mainContainer {
-                background-color: rgba(255, 255, 255, 0.95);
-                border-radius: 15px;
-                border: 1px solid rgba(0, 0, 0, 0.1);
-            }
-        """)
-        container_layout = QVBoxLayout(main_container)
-        container_layout.setContentsMargins(0, 0, 0, 0)
-        container_layout.setSpacing(0)
         
         # 1. ВЕРХНЯ ПАНЕЛЬ (Toolbar)
         top_panel = QFrame()
         top_panel.setObjectName("topPanel")
-        top_panel.setStyleSheet("""
-            #topPanel {
-                background-color: rgba(248, 248, 248, 0.95);
-                border-top-left-radius: 15px;
-                border-top-right-radius: 15px;
-                border-bottom: 1px solid rgba(0, 0, 0, 0.1);
-                min-height: 70px;
-                padding: 10px;
-            }
-        """)
         top_layout = QHBoxLayout(top_panel)
         top_layout.setContentsMargins(15, 5, 15, 5)
         
-        # Кнопки у верхній панелі (тепер з іконками)
-        # 1. Кнопка "Нова програма"
-        self.new_button = QToolButton()
-        self.new_button.setIcon(QIcon(get_icon_path("add.svg")))
-        self.new_button.setText("Нова програма")
-        self.new_button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-        self.new_button.setIconSize(QSize(32, 32))
-        self.new_button.setMinimumWidth(80)
+        # Кнопки у верхній панелі (тимчасово залишаємо старі кнопки)
+        self.new_button = QPushButton("Нова програма")
         self.new_button.clicked.connect(self.create_program)
-        self.new_button.setStyleSheet("""
-            QToolButton {
-                border: none;
-                color: #007AFF;
-                padding: 6px;
-                border-radius: 6px;
-            }
-            QToolButton:hover {
-                background-color: rgba(0, 122, 255, 0.1);
-            }
-            QToolButton:pressed {
-                background-color: rgba(0, 122, 255, 0.2);
-            }
-        """)
         
-        # 2. Кнопка "Редагувати"
-        self.edit_button = QToolButton()
-        self.edit_button.setIcon(QIcon(get_icon_path("edit.svg")))
-        self.edit_button.setText("Редагувати")
-        self.edit_button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-        self.edit_button.setIconSize(QSize(32, 32))
-        self.edit_button.setMinimumWidth(80)
+        self.edit_button = QPushButton("Редагувати")
         self.edit_button.clicked.connect(self.edit_program)
-        self.edit_button.setStyleSheet("""
-            QToolButton {
-                border: none;
-                color: #007AFF;
-                padding: 6px;
-                border-radius: 6px;
-            }
-            QToolButton:hover {
-                background-color: rgba(0, 122, 255, 0.1);
-            }
-            QToolButton:pressed {
-                background-color: rgba(0, 122, 255, 0.2);
-            }
-        """)
         
-        # 3. Кнопка "Видалити"
-        self.delete_button = QToolButton()
-        self.delete_button.setIcon(QIcon(get_icon_path("delete.svg")))
-        self.delete_button.setText("Видалити")
-        self.delete_button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-        self.delete_button.setIconSize(QSize(32, 32))
-        self.delete_button.setMinimumWidth(80)
+        self.delete_button = QPushButton("Видалити")
         self.delete_button.clicked.connect(self.delete_program)
-        self.delete_button.setStyleSheet("""
-            QToolButton {
-                border: none;
-                color: #007AFF;
-                padding: 6px;
-                border-radius: 6px;
-            }
-            QToolButton:hover {
-                background-color: rgba(0, 122, 255, 0.1);
-            }
-            QToolButton:pressed {
-                background-color: rgba(0, 122, 255, 0.2);
-            }
-        """)
         
-        # 4. Кнопка "Запустити"
-        self.run_button = QToolButton()
-        self.run_button.setIcon(QIcon(get_icon_path("play.svg")))
-        self.run_button.setText("Запустити")
-        self.run_button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-        self.run_button.setIconSize(QSize(32, 32))
-        self.run_button.setMinimumWidth(80)
+        self.run_button = QPushButton("Запустити")
         self.run_button.clicked.connect(self.run_program)
-        self.run_button.setStyleSheet("""
-            QToolButton {
-                border: none;
-                color: #007AFF;
-                padding: 6px;
-                border-radius: 6px;
-            }
-            QToolButton:hover {
-                background-color: rgba(0, 122, 255, 0.1);
-            }
-            QToolButton:pressed {
-                background-color: rgba(0, 122, 255, 0.2);
-            }
-        """)
         
-        # 5. Кнопка "Пауза"
-        self.pause_button = QToolButton()
-        self.pause_button.setIcon(QIcon(get_icon_path("pause.svg")))
-        self.pause_button.setText("Пауза")
-        self.pause_button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-        self.pause_button.setIconSize(QSize(32, 32))
-        self.pause_button.setMinimumWidth(80)
+        self.pause_button = QPushButton("Пауза")
         self.pause_button.clicked.connect(self.pause_program)
         self.pause_button.setEnabled(False)
-        self.pause_button.setStyleSheet("""
-            QToolButton {
-                border: none;
-                color: #007AFF;
-                padding: 6px;
-                border-radius: 6px;
-            }
-            QToolButton:hover {
-                background-color: rgba(0, 122, 255, 0.1);
-            }
-            QToolButton:pressed {
-                background-color: rgba(0, 122, 255, 0.2);
-            }
-            QToolButton:disabled {
-                color: rgba(0, 122, 255, 0.5);
-            }
-        """)
         
-        # 6. Кнопка "Зупинити"
-        self.stop_button = QToolButton()
-        self.stop_button.setIcon(QIcon(get_icon_path("stop.svg")))
-        self.stop_button.setText("Зупинити")
-        self.stop_button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-        self.stop_button.setIconSize(QSize(32, 32))
-        self.stop_button.setMinimumWidth(80)
+        self.stop_button = QPushButton("Зупинити")
         self.stop_button.clicked.connect(self.stop_program)
         self.stop_button.setEnabled(False)
-        self.stop_button.setStyleSheet("""
-            QToolButton {
-                border: none;
-                color: #007AFF;
-                padding: 6px;
-                border-radius: 6px;
-            }
-            QToolButton:hover {
-                background-color: rgba(0, 122, 255, 0.1);
-            }
-            QToolButton:pressed {
-                background-color: rgba(0, 122, 255, 0.2);
-            }
-            QToolButton:disabled {
-                color: rgba(0, 122, 255, 0.5);
-            }
-        """)
         
-        # Розділювальна лінія
-        separator = QFrame()
-        separator.setFrameShape(QFrame.VLine)
-        separator.setFrameShadow(QFrame.Sunken)
-        separator.setStyleSheet("background-color: rgba(0, 0, 0, 0.1); margin: 5px 10px;")
-        separator.setFixedWidth(1)
-        separator.setFixedHeight(50)
-        
-        # 7. Кнопка "Змінити API ключ"
-        self.api_button = QToolButton()
-        self.api_button.setIcon(QIcon(get_icon_path("key.svg")))
-        self.api_button.setText("API ключ")
-        self.api_button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-        self.api_button.setIconSize(QSize(32, 32))
-        self.api_button.setMinimumWidth(80)
+        self.api_button = QPushButton("Змінити API ключ")
         self.api_button.clicked.connect(self.change_api_key)
-        self.api_button.setStyleSheet("""
-            QToolButton {
-                border: none;
-                color: #007AFF;
-                padding: 6px;
-                border-radius: 6px;
-            }
-            QToolButton:hover {
-                background-color: rgba(0, 122, 255, 0.1);
-            }
-            QToolButton:pressed {
-                background-color: rgba(0, 122, 255, 0.2);
-            }
-        """)
         
         top_layout.addWidget(self.new_button)
         top_layout.addWidget(self.edit_button)
         top_layout.addWidget(self.delete_button)
-        top_layout.addSpacing(10)
         top_layout.addWidget(self.run_button)
         top_layout.addWidget(self.pause_button)
         top_layout.addWidget(self.stop_button)
-        top_layout.addWidget(separator)
+        top_layout.addSpacing(20)
         top_layout.addWidget(self.api_button)
         top_layout.addStretch()  # Пушуємо кнопки вліво
         
-        container_layout.addWidget(top_panel)
+        main_layout.addWidget(top_panel)
         
         # 2. ОСНОВНИЙ КОНТЕНТ (з бічною панеллю та областю контенту)
         content_container = QWidget()
@@ -809,15 +628,15 @@ class WebMorpherApp(QMainWindow):
         
         # Заголовок бічної панелі
         sidebar_title = QLabel("Доступні програми")
-        sidebar_title.setStyleSheet("font-weight: bold; font-size: 16px; margin-bottom: 15px; color: #333;")
+        sidebar_title.setStyleSheet("font-weight: bold; font-size: 14px; margin-bottom: 10px;")
         sidebar_layout.addWidget(sidebar_title)
         
         # Список програм
         self.program_list = QListWidget()
         self.program_list.setStyleSheet("""
             QListWidget {
-                background-color: rgba(250, 250, 250, 0.5);
-                border: 1px solid rgba(0, 0, 0, 0.1);
+                background-color: transparent;
+                border: none;
                 border-radius: 10px;
                 padding: 5px;
                 outline: none;
@@ -846,27 +665,25 @@ class WebMorpherApp(QMainWindow):
                 border-radius: 8px;
                 margin-top: 10px;
                 padding-top: 15px;
-                background-color: rgba(250, 250, 250, 0.5);
                 font-weight: bold;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
                 subcontrol-position: top center;
                 padding: 0 5px;
-                color: #333;
             }
         """)
         options_layout = QVBoxLayout(options_group)
         
         # Опція фонового режиму
         self.headless_checkbox = QCheckBox("Запускати браузер у фоновому режимі")
-        self.headless_checkbox.setStyleSheet("font-size: 13px;")
+        self.headless_checkbox.setStyleSheet("font-size: 12px;")
         options_layout.addWidget(self.headless_checkbox)
         
         # Опція використання профілю користувача
         self.use_user_profile_checkbox = QCheckBox("Використовувати поточний профіль браузера")
         self.use_user_profile_checkbox.setToolTip("Запускати з профілем, де збережені паролі, історія та налаштування")
-        self.use_user_profile_checkbox.setStyleSheet("font-size: 13px;")
+        self.use_user_profile_checkbox.setStyleSheet("font-size: 12px;")
         if not self.chrome_profile_path:
             self.use_user_profile_checkbox.setEnabled(False)
             self.use_user_profile_checkbox.setToolTip("Профіль Chrome не знайдено")
@@ -950,12 +767,12 @@ class WebMorpherApp(QMainWindow):
         
         # Заголовок статуса
         status_header = QLabel("Поточний статус:")
-        status_header.setStyleSheet("font-weight: bold; font-size: 14px; color: #333;")
+        status_header.setStyleSheet("font-weight: bold; font-size: 14px;")
         status_layout.addWidget(status_header)
         
         # Текст статуса
         self.status_label = QLabel("Очікування запуску...")
-        self.status_label.setStyleSheet("padding: 10px; font-size: 13px; color: #666;")
+        self.status_label.setStyleSheet("padding: 10px; font-size: 13px;")
         status_layout.addWidget(self.status_label)
         
         result_layout.addWidget(status_frame)
@@ -985,10 +802,7 @@ class WebMorpherApp(QMainWindow):
         content_layout.setStretch(0, 1)  # Бічна панель
         content_layout.setStretch(1, 3)  # Основний контент
         
-        container_layout.addWidget(content_container)
-        
-        # Додаємо основний контейнер до макету
-        main_layout.addWidget(main_container)
+        main_layout.addWidget(content_container)
         
         # Статус бар
         self.statusBar().showMessage("Готовий до роботи")
@@ -996,9 +810,6 @@ class WebMorpherApp(QMainWindow):
             QStatusBar {
                 background-color: rgba(240, 240, 240, 0.9);
                 border-top: 1px solid rgba(0, 0, 0, 0.1);
-                border-bottom-left-radius: 15px;
-                border-bottom-right-radius: 15px;
-                padding-left: 10px;
             }
         """)
         
@@ -1259,16 +1070,6 @@ class WebMorpherApp(QMainWindow):
         # Зберігаємо конфігурацію перед виходом
         self.save_config()
         event.accept()
-
-    def show_welcome_dialog(self):
-        # Показывает экран приветствия при первом запуске
-        welcome_dialog = FirstRunDialog(self)
-        welcome_dialog.exec_()
-        
-        # Если пользователь выбрал "Не показывать снова", сохраняем эту настройку
-        if welcome_dialog.dont_show_again():
-            self.show_welcome_screen = False
-            self.save_config()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

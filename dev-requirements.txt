@@ -1,0 +1,6 @@
+# Інструменти розробки
+PyQt5-tools>=5.15.0
+pyinstaller>=6.0.0
+pytest>=7.0.0
+black>=23.0.0
+flake8>=6.0.0 

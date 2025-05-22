@@ -1,6 +1,36 @@
-browser-use>=0.0.18
-langchain-openai>=0.0.6
-playwright>=1.40.0
-PyQt5>=5.15.0
-python-dotenv>=1.0.0
-numpy==1.25.2 
+# Основні залежності
+numpy==1.25.2
+PyQt5==5.15.11
+PyQt5-sip==12.17.0
+PyQt5-Qt5==5.15.16
+
+# Browser-use та його компоненти
+browser-use==0.1.48
+playwright==1.52.0
+langchain==0.3.22
+langchain-core==0.3.49
+langchain-openai==0.3.11
+langchain-anthropic==0.3.3
+langchain-aws==0.2.19
+langchain-google-genai==2.1.2
+langchain-ollama==0.3.0
+langchain-deepseek==0.1.3
+
+# Обробка даних та утиліти
+faiss-cpu==1.11.0
+markdownify==1.1.0
+pydantic==2.10.6
+pyperclip==1.9.0
+screeninfo==0.8.1
+psutil==7.0.0
+mem0ai==0.1.93
+
+# Мережа та API
+httpx==0.28.1
+requests==2.32.3
+python-dotenv==1.1.0
+google-api-core==2.24.2
+
+# Додаткові залежності
+anyio==4.9.0
+typing-extensions==4.13.2 

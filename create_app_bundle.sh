@@ -61,6 +61,13 @@ DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
 RESOURCES_DIR="\$DIR/../Resources"
 PYTHON_ENV="\$RESOURCES_DIR/python_env"
 
+# Предотвращение проблем с многопоточностью OpenBLAS в NumPy
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export VECLIB_MAXIMUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export OMP_NUM_THREADS=1
+
 # Активация виртуального окружения
 source "\$PYTHON_ENV/bin/activate"
 
@@ -82,14 +89,20 @@ source "$PYTHON_ENV_DIR/bin/activate"
 pip install --upgrade pip
 pip install -r requirements.txt
 pip install playwright
+pip install numpy==1.25.2
 playwright install chromium
 
 # Копирование исходных файлов приложения
 echo "Копирование исходных файлов..."
 cp app.py "$RESOURCES_DIR/"
+cp resources_rc.py "$RESOURCES_DIR/"
+cp icons.qrc "$RESOURCES_DIR/"
+cp first_run_dialog.py "$RESOURCES_DIR/"
 cp README.md "$RESOURCES_DIR/"
 cp INSTALL.md "$RESOURCES_DIR/"
 cp requirements.txt "$RESOURCES_DIR/"
+cp TROUBLESHOOTING.md "$RESOURCES_DIR/"
+cp FAQ.md "$RESOURCES_DIR/"
 
 # Удаляем config-файл с API ключом, если он существует
 CONFIG_FILE=~/.webmorpher_config.json
