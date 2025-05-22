@@ -1,0 +1,12 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/">
+        <file>icons/svg/add.svg</file>
+        <file>icons/svg/edit.svg</file>
+        <file>icons/svg/delete.svg</file>
+        <file>icons/svg/play.svg</file>
+        <file>icons/svg/pause.svg</file>
+        <file>icons/svg/stop.svg</file>
+        <file>icons/svg/key.svg</file>
+    </qresource>
+</RCC> 
